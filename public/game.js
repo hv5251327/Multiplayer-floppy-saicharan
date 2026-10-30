@@ -1,42 +1,42 @@
 // ============================================================
-// Multiplayer Flappy Bird - Client Engine
-// Real-time canvas rendering + Socket.IO comms
+// Multiplayer Flappy Bird - Client Engine v2
+// Fixed: vel-based rotation, other-player transparency, pipe glitch
 // ============================================================
 
 const socket = io();
 
 // ── DOM References ──────────────────────────────────────────
-const joinScreen      = document.getElementById('join-screen');
-const gameScreen      = document.getElementById('game-screen');
-const nameInput       = document.getElementById('name-input');
-const joinBtn         = document.getElementById('join-btn');
-const onlineCountEl   = document.getElementById('online-count');
-const hudOnlineEl     = document.getElementById('hud-online');
-const myScoreEl       = document.getElementById('my-score');
-const playerListEl    = document.getElementById('player-list');
-const muteBtn         = document.getElementById('mute-btn');
-const canvas          = document.getElementById('game-canvas');
-const ctx             = canvas.getContext('2d');
-const countdownOvr    = document.getElementById('countdown-overlay');
-const countdownNum    = document.getElementById('countdown-number');
-const waitingOvr      = document.getElementById('waiting-overlay');
-const roundoverOvr    = document.getElementById('roundover-overlay');
-const leaderboardEl   = document.getElementById('leaderboard');
+const joinScreen    = document.getElementById('join-screen');
+const gameScreen    = document.getElementById('game-screen');
+const nameInput     = document.getElementById('name-input');
+const joinBtn       = document.getElementById('join-btn');
+const onlineCountEl = document.getElementById('online-count');
+const hudOnlineEl   = document.getElementById('hud-online');
+const myScoreEl     = document.getElementById('my-score');
+const playerListEl  = document.getElementById('player-list');
+const muteBtn       = document.getElementById('mute-btn');
+const canvas        = document.getElementById('game-canvas');
+const ctx           = canvas.getContext('2d');
+const countdownOvr  = document.getElementById('countdown-overlay');
+const countdownNum  = document.getElementById('countdown-number');
+const waitingOvr    = document.getElementById('waiting-overlay');
+const roundoverOvr  = document.getElementById('roundover-overlay');
+const leaderboardEl = document.getElementById('leaderboard');
 
 // ── Audio ───────────────────────────────────────────────────
 const bgmAudio  = document.getElementById('audio-bgm');
 const goAudio   = document.getElementById('audio-gameover');
 let isMuted     = false;
-let audioUnlocked = false;
+let audioReady  = false;
 
 function unlockAudio() {
-  if (audioUnlocked) return;
-  audioUnlocked = true;
+  if (audioReady) return;
+  audioReady = true;
   bgmAudio.volume = 0.8;
   bgmAudio.play().catch(() => {});
 }
 
-function playGameover() {
+function playGameoverSound() {
   if (isMuted) return;
   bgmAudio.pause();
   goAudio.currentTime = 0;
@@ -44,13 +44,13 @@ function playGameover() {
 }
 
 function resumeBGM() {
-  if (isMuted || !audioUnlocked) return;
+  if (isMuted || !audioReady) return;
   goAudio.pause();
   bgmAudio.currentTime = 0;
   bgmAudio.play().catch(() => {});
 }
 
-muteBtn.addEventListener('click', (e) => {
+muteBtn.addEventListener('click', e => {
   e.stopPropagation();
   isMuted = !isMuted;
   if (isMuted) {
@@ -65,85 +65,85 @@ muteBtn.addEventListener('click', (e) => {
 });
 
 // ── Canvas Sizing ───────────────────────────────────────────
-const CANVAS_WIDTH  = 360;
-let CANVAS_HEIGHT   = 640;
-let GROUND_Y        = 550;
-let scale           = 1;
+const CW = 360;   // fixed logical width
+let CH   = 640;   // dynamic logical height
+let GY   = 550;   // ground Y
 
 function resizeCanvas() {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  CANVAS_HEIGHT = Math.round(CANVAS_WIDTH * (vh / vw));
-  CANVAS_HEIGHT = Math.max(580, Math.min(820, CANVAS_HEIGHT));
-  GROUND_Y = CANVAS_HEIGHT - 90;
-  canvas.width  = CANVAS_WIDTH;
-  canvas.height = CANVAS_HEIGHT;
-  scale = Math.min(vw / CANVAS_WIDTH, vh / CANVAS_HEIGHT);
-  canvas.style.width  = Math.round(CANVAS_WIDTH  * scale) + 'px';
-  canvas.style.height = Math.round(CANVAS_HEIGHT * scale) + 'px';
+  CH = Math.max(580, Math.min(820, Math.round(CW * vh / vw)));
+  GY = CH - 90;
+  canvas.width  = CW;
+  canvas.height = CH;
+  const s = Math.min(vw / CW, vh / CH);
+  canvas.style.width  = Math.round(CW * s) + 'px';
+  canvas.style.height = Math.round(CH * s) + 'px';
 }
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
 // ── Assets ──────────────────────────────────────────────────
-const faceImg = new Image(); faceImg.src = 'assets/player.png';
-const pipeImg = new Image(); pipeImg.src = 'assets/nivea.png';
+const faceImg = new Image();
+faceImg.src   = 'assets/player.png';
+const pipeImg = new Image();
+pipeImg.src   = 'assets/nivea.png';
 
 // ── Game State ───────────────────────────────────────────────
-let myId        = socket.id;
-let myName      = '';
-let gameState   = 'lobby';
-let serverPipes = [];
-let serverPlayers = {};  // id -> { id, name, y, alive, score, color }
-let myAlive     = true;
-let stars       = [];
-let frames      = 0;
-let groundX     = 0;
+let myId      = null;
+let myName    = '';
+let gameState = 'lobby';
 
-// Generate stars once
-for (let i = 0; i < 48; i++) {
-  stars.push({
-    x: Math.random() * 360,
-    y: Math.random() * 450,
-    r: Math.random() * 1.8 + 0.5,
-    a: Math.random() * 0.7 + 0.3,
-    s: Math.random() * 0.03 + 0.01
-  });
-}
+// Server-synced state
+let pipes     = [];   // [{x, top}]
+let players   = {};   // {id: {id, name, y, vel, alive, score, color}}
+
+let frames    = 0;
+let groundX   = 0;
+let loopRunning = false;
+
+// Stars (static, generated once)
+const stars = Array.from({ length: 48 }, () => ({
+  x: Math.random() * CW,
+  y: Math.random() * 450,
+  r: Math.random() * 1.8 + 0.5,
+  a: Math.random() * 0.7 + 0.3,
+  speed: Math.random() * 0.03 + 0.01
+}));
 
 // ── Socket Events ────────────────────────────────────────────
-socket.on('connect', () => {
-  myId = socket.id;
-});
+socket.on('connect', () => { myId = socket.id; });
 
-socket.on('init', ({ gameState: gs, playerCount }) => {
+socket.on('init', ({ gameState: gs, playerCount, existingPlayers }) => {
   gameState = gs;
-  onlineCountEl.textContent = playerCount;
-  hudOnlineEl.textContent = playerCount;
+  updateOnlineCount(playerCount);
+  existingPlayers.forEach(p => {
+    players[p.id] = { id: p.id, name: p.name, color: p.color, y: 250, vel: 0, alive: true, score: 0 };
+  });
+  updatePlayerListUI();
 });
 
 socket.on('playerJoined', ({ id, name, color, playerCount }) => {
-  onlineCountEl.textContent = playerCount;
-  hudOnlineEl.textContent = playerCount;
-  if (!serverPlayers[id]) {
-    serverPlayers[id] = { id, name, color, y: 250, alive: true, score: 0 };
+  updateOnlineCount(playerCount);
+  if (!players[id]) {
+    players[id] = { id, name, color, y: 250, vel: 0, alive: true, score: 0 };
   }
   updatePlayerListUI();
 });
 
 socket.on('playerLeft', ({ id, playerCount }) => {
-  onlineCountEl.textContent = playerCount;
-  hudOnlineEl.textContent = playerCount;
-  delete serverPlayers[id];
+  updateOnlineCount(playerCount);
+  delete players[id];
   updatePlayerListUI();
 });
 
 socket.on('countdown', ({ count }) => {
   gameState = 'countdown';
-  showOverlay(countdownOvr);
-  hideOverlay(waitingOvr);
-  hideOverlay(roundoverOvr);
+  showOvr(countdownOvr);
+  hideOvr(waitingOvr);
+  hideOvr(roundoverOvr);
   countdownNum.textContent = count;
+  // Retrigger animation
   countdownNum.style.animation = 'none';
   void countdownNum.offsetWidth;
   countdownNum.style.animation = 'countPop 1s ease-out';
@@ -153,56 +153,77 @@ socket.on('countdown', ({ count }) => {
 socket.on('gameState', ({ state }) => {
   gameState = state;
   if (state === 'playing') {
-    hideOverlay(countdownOvr);
-    hideOverlay(waitingOvr);
-    hideOverlay(roundoverOvr);
-    myAlive = serverPlayers[myId]?.alive ?? true;
+    hideOvr(countdownOvr);
+    hideOvr(waitingOvr);
+    hideOvr(roundoverOvr);
   } else if (state === 'lobby') {
-    hideOverlay(countdownOvr);
-    showOverlay(waitingOvr);
+    hideOvr(countdownOvr);
+    showOvr(waitingOvr);
   }
 });
 
-socket.on('tick', ({ pipes, players }) => {
-  serverPipes = pipes;
-  players.forEach(p => {
-    serverPlayers[p.id] = { ...serverPlayers[p.id], ...p };
+socket.on('tick', ({ pipes: sp, players: sp2 }) => {
+  pipes = sp;  // [{x, top}]
+
+  sp2.forEach(p => {
+    if (!players[p.id]) {
+      players[p.id] = { ...p };
+    } else {
+      // Smoothly merge server update (lerp y, direct vel)
+      const cur = players[p.id];
+      cur.y     = p.y;   // trust server position
+      cur.vel   = p.vel !== undefined ? p.vel : cur.vel;
+      cur.alive = p.alive;
+      cur.score = p.score;
+      cur.color = p.color;
+    }
   });
-  myAlive = serverPlayers[myId]?.alive ?? false;
-  const me = serverPlayers[myId];
+
+  const me = players[myId];
   if (me) myScoreEl.textContent = me.score;
+
   updatePlayerListUI();
 });
 
-socket.on('playerDied', ({ id, score, name }) => {
-  if (serverPlayers[id]) serverPlayers[id].alive = false;
+socket.on('playerDied', ({ id }) => {
+  if (players[id]) players[id].alive = false;
   if (id === myId) {
-    myAlive = false;
-    playGameover();
-    showOverlay(waitingOvr);
+    playGameoverSound();
+    showOvr(waitingOvr);
   }
   updatePlayerListUI();
 });
 
-socket.on('joinedMidGame', ({ pipes, players }) => {
-  serverPipes = pipes;
-  players.forEach(p => { serverPlayers[p.id] = p; });
-  myAlive = false;
-  showOverlay(waitingOvr);
+socket.on('joinedMidGame', ({ pipes: sp, players: sp2 }) => {
+  pipes = sp;
+  sp2.forEach(p => { players[p.id] = p; });
+  if (players[myId]) players[myId].alive = false;
+  showOvr(waitingOvr);
 });
 
 socket.on('roundOver', ({ leaderboard }) => {
   gameState = 'roundover';
-  hideOverlay(countdownOvr);
-  hideOverlay(waitingOvr);
-  showOverlay(roundoverOvr);
+  hideOvr(countdownOvr);
+  hideOvr(waitingOvr);
+  showOvr(roundoverOvr);
   renderLeaderboard(leaderboard);
-  if (!myAlive) playGameover();
+  const me = players[myId];
+  if (!me || !me.alive) playGameoverSound();
 });
 
-// ── Overlay Helpers ──────────────────────────────────────────
-function showOverlay(el) { el.classList.remove('hidden'); }
-function hideOverlay(el) { el.classList.add('hidden'); }
+// ── UI Helpers ────────────────────────────────────────────────
+function showOvr(el) { el.classList.remove('hidden'); }
+function hideOvr(el) { el.classList.add('hidden');    }
+function updateOnlineCount(n) {
+  onlineCountEl.textContent = n;
+  hudOnlineEl.textContent   = n;
+}
+
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
 
 function renderLeaderboard(lb) {
   const medals = ['🥇','🥈','🥉'];
@@ -215,13 +236,8 @@ function renderLeaderboard(lb) {
     </div>`).join('');
 }
 
-function escHtml(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
 function updatePlayerListUI() {
-  const all = Object.values(serverPlayers);
-  playerListEl.innerHTML = all.map(p => `
+  playerListEl.innerHTML = Object.values(players).map(p => `
     <div class="player-row ${p.alive ? '' : 'dead'} ${p.id === myId ? 'me' : ''}">
       <div class="player-dot" style="background:${p.color}"></div>
       <div class="player-name-label">${escHtml(p.name)}</div>
@@ -238,43 +254,59 @@ function joinGame() {
   gameScreen.classList.remove('hidden');
   resizeCanvas();
   socket.emit('join', { name });
-  startGameLoop();
+  if (!loopRunning) {
+    loopRunning = true;
+    requestAnimationFrame(renderLoop);
+  }
 }
 
 joinBtn.addEventListener('click', joinGame);
-nameInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') joinGame();
-});
+nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') joinGame(); });
 
 // ── Flap Input ──────────────────────────────────────────────
 function doFlap() {
   unlockAudio();
-  if (gameState === 'playing' && myAlive) {
+  if (gameState === 'playing') {
+    const me = players[myId];
+    if (me && me.alive) {
+      me.vel = -4.6; // Instant optimistic local response
+    }
     socket.emit('flap');
   }
 }
 
-canvas.addEventListener('pointerdown', (e) => { e.preventDefault(); doFlap(); });
-canvas.addEventListener('touchstart', (e) => { if (e.cancelable) e.preventDefault(); doFlap(); }, { passive: false });
-window.addEventListener('keydown', (e) => {
+// Tap anywhere on game screen or canvas
+gameScreen.addEventListener('pointerdown', e => {
+  if (e.target.closest('#mute-btn')) return;
+  e.preventDefault();
+  doFlap();
+});
+canvas.addEventListener('touchstart', e => {
+  if (e.cancelable) e.preventDefault();
+  doFlap();
+}, { passive: false });
+window.addEventListener('keydown', e => {
   if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); doFlap(); }
 });
 
-// ── Background Drawing ──────────────────────────────────────
+// ── Render Helpers ───────────────────────────────────────────
+const PIPE_W       = 56;
+const GAP          = 185;
+const BOTTLE_H     = 135; // natural Nivea bottle height in pixels
+
 function drawBackground() {
-  // Dark night sky gradient
-  const sky = ctx.createLinearGradient(0, 0, 0, GROUND_Y);
-  sky.addColorStop(0, '#030712');
+  // Night sky gradient
+  const sky = ctx.createLinearGradient(0, 0, 0, GY);
+  sky.addColorStop(0,    '#030712');
   sky.addColorStop(0.45, '#090d16');
   sky.addColorStop(0.78, '#0f172a');
-  sky.addColorStop(1, '#1e1b4b');
+  sky.addColorStop(1,    '#1e1b4b');
   ctx.fillStyle = sky;
-  ctx.fillRect(0, 0, CANVAS_WIDTH, GROUND_Y);
+  ctx.fillRect(0, 0, CW, GY);
 
-  // Stars
+  // Twinkling stars
   stars.forEach(s => {
-    s.a += Math.sin(frames * s.s) * 0.015;
-    s.a = Math.max(0.15, Math.min(1, s.a));
+    s.a = Math.max(0.15, Math.min(1, s.a + Math.sin(frames * s.speed) * 0.015));
     ctx.save();
     ctx.globalAlpha = s.a;
     ctx.fillStyle = '#ffffff';
@@ -284,87 +316,103 @@ function drawBackground() {
     ctx.restore();
   });
 
-  // City silhouettes
+  // City skyline silhouettes
   ctx.fillStyle = 'rgba(15,23,42,0.6)';
-  [[15,60,35],[60,90,45],[115,72,38],[165,108,50],[225,82,40],[275,118,54],[338,68,34]].forEach(([x,h,w]) => {
-    ctx.fillRect(x, GROUND_Y - h, w, h);
-  });
+  [[15,58,34],[60,88,44],[115,70,38],[165,106,50],[225,80,40],[275,116,54],[338,66,34]]
+    .forEach(([x, h, w]) => ctx.fillRect(x, GY - h, w, h));
 
   // Ground
   ctx.fillStyle = '#0f172a';
-  ctx.fillRect(0, GROUND_Y, CANVAS_WIDTH, CANVAS_HEIGHT - GROUND_Y);
+  ctx.fillRect(0, GY, CW, CH - GY);
   ctx.fillStyle = '#38bdf8';
-  ctx.fillRect(0, GROUND_Y, CANVAS_WIDTH, 4);
+  ctx.fillRect(0, GY, CW, 4);
   ctx.fillStyle = '#1e293b';
-  ctx.fillRect(0, GROUND_Y + 4, CANVAS_WIDTH, 14);
+  ctx.fillRect(0, GY + 4, CW, 14);
 
-  ctx.strokeStyle = '#1e293b';
+  // Diagonal ground stripes
+  ctx.strokeStyle = '#172033';
   ctx.lineWidth = 3;
-  for (let x = groundX - 30; x < CANVAS_WIDTH + 30; x += 20) {
+  for (let x = groundX - 30; x < CW + 30; x += 20) {
     ctx.beginPath();
-    ctx.moveTo(x, GROUND_Y + 18);
-    ctx.lineTo(x - 12, CANVAS_HEIGHT);
+    ctx.moveTo(x, GY + 18);
+    ctx.lineTo(x - 12, CH);
     ctx.stroke();
   }
 }
 
-// ── Pipe Drawing ─────────────────────────────────────────────
-const PIPE_W = 56;
-const NATURAL_BOTTLE_H = 135;
-
 function drawPipes() {
-  serverPipes.forEach(p => {
-    const bottomY = p.top + 185;
-    const bottomH = GROUND_Y - bottomY;
+  pipes.forEach(p => {
+    const bottomY = p.top + GAP;
+    const bottomH = GY - bottomY;
 
-    // TOP: inverted bottle with roller ball pointing into gap
+    // ── Top bottle (inverted – roller ball faces DOWN into gap) ──
     ctx.save();
-    const topBottleH = Math.min(p.top, NATURAL_BOTTLE_H);
-    if (p.top > NATURAL_BOTTLE_H) {
-      ctx.fillStyle = '#0a0f1e';
-      ctx.fillRect(p.x + 10, 0, PIPE_W - 20, p.top - NATURAL_BOTTLE_H);
+    const topBH = Math.min(p.top, BOTTLE_H);
+    // Dark rod for ceiling gap above bottle
+    if (p.top > BOTTLE_H) {
+      ctx.fillStyle = '#090d16';
+      ctx.fillRect(p.x + 10, 0, PIPE_W - 20, p.top - BOTTLE_H);
     }
+    // Draw bottle inverted: translate to bottom-right corner of bottle, flip
     ctx.translate(p.x + PIPE_W, p.top);
     ctx.scale(-1, -1);
-    if (pipeImg.complete) ctx.drawImage(pipeImg, 0, 0, PIPE_W, topBottleH);
-    else { ctx.scale(-1,-1); ctx.fillStyle = '#1e3a8a'; ctx.fillRect(-PIPE_W, -p.top, PIPE_W, p.top); }
+    if (pipeImg.complete && pipeImg.naturalWidth > 0) {
+      ctx.drawImage(pipeImg, 0, 0, PIPE_W, topBH);
+    } else {
+      ctx.fillStyle = '#1e3a8a';
+      ctx.fillRect(0, 0, PIPE_W, topBH);
+    }
     ctx.restore();
 
-    // BOTTOM: upright bottle with roller ball pointing up into gap
+    // ── Bottom bottle (upright – roller ball faces UP into gap) ──
     ctx.save();
-    const botBottleH = Math.min(bottomH, NATURAL_BOTTLE_H);
-    if (pipeImg.complete) ctx.drawImage(pipeImg, p.x, bottomY, PIPE_W, botBottleH);
-    else { ctx.fillStyle = '#1e3a8a'; ctx.fillRect(p.x, bottomY, PIPE_W, bottomH); }
-    if (bottomH > NATURAL_BOTTLE_H) {
-      ctx.fillStyle = '#0a0f1e';
-      ctx.fillRect(p.x + 10, bottomY + NATURAL_BOTTLE_H, PIPE_W - 20, bottomH - NATURAL_BOTTLE_H);
+    const botBH = Math.min(bottomH, BOTTLE_H);
+    if (pipeImg.complete && pipeImg.naturalWidth > 0) {
+      ctx.drawImage(pipeImg, p.x, bottomY, PIPE_W, botBH);
+    } else {
+      ctx.fillStyle = '#1e3a8a';
+      ctx.fillRect(p.x, bottomY, PIPE_W, bottomH);
+    }
+    // Dark rod below bottle if it doesn't reach ground
+    if (bottomH > BOTTLE_H) {
+      ctx.fillStyle = '#090d16';
+      ctx.fillRect(p.x + 10, bottomY + BOTTLE_H, PIPE_W - 20, bottomH - BOTTLE_H);
     }
     ctx.restore();
   });
 }
 
-// ── Player Drawing ───────────────────────────────────────────
-const PLAYER_FIXED_X = 90;
 const FACE_W = 40;
 const FACE_H = 54;
+const BIRD_X = 90; // All birds share same X (server authoritative)
 
 function drawPlayers() {
-  Object.values(serverPlayers).forEach(p => {
+  const all = Object.values(players);
+
+  // Sort so your own bird is rendered last (on top of others)
+  all.sort((a, b) => (a.id === myId ? 1 : 0) - (b.id === myId ? 1 : 0));
+
+  all.forEach(p => {
     if (!p.alive) return;
 
+    const isMe = p.id === myId;
+
+    // Velocity-based tilt rotation (uses server-sent vel)
     const vel = p.vel || 0;
-    let rot = 0;
-    if (vel < 0) rot = Math.max(-0.35, vel * 0.06);
-    else rot = Math.min(Math.PI / 2.8, (vel - 2) * 0.08);
+    let rot = vel < 0
+      ? Math.max(-0.35, vel * 0.06)
+      : Math.min(Math.PI / 2.8, (vel - 2) * 0.08);
 
     ctx.save();
-    ctx.translate(PLAYER_FIXED_X, p.y);
+    ctx.translate(BIRD_X, p.y);
     ctx.rotate(rot);
 
-    // Colored tinted halo for this player
-    ctx.save();
+    // ── Other players: 82% opacity so they are clearly visible (less transparent) ──
+    ctx.globalAlpha = isMe ? 1.0 : 0.82;
+
+    // Coloured glow halo
     ctx.shadowColor = p.color;
-    ctx.shadowBlur = 14;
+    ctx.shadowBlur  = isMe ? 18 : 12;
 
     if (faceImg.complete && faceImg.naturalWidth > 0) {
       ctx.drawImage(faceImg, -FACE_W / 2, -FACE_H / 2, FACE_W, FACE_H);
@@ -374,68 +422,69 @@ function drawPlayers() {
       ctx.arc(0, 0, 18, 0, Math.PI * 2);
       ctx.fill();
     }
-    ctx.restore();
+    ctx.shadowBlur  = 0;
 
-    // Player name tag below head
-    ctx.shadowBlur = 0;
-    const tag = p.id === myId ? `👤 ${p.name}` : p.name;
-    const tagW = ctx.measureText(tag).width + 16;
-    ctx.fillStyle = p.id === myId ? '#3b82f6' : '#1e293b';
-    ctx.beginPath();
-    ctx.roundRect(-tagW / 2, FACE_H / 2 + 4, tagW, 18, 5);
+    // ── Name tag below bird ──
+    ctx.globalAlpha = isMe ? 1.0 : 0.90;
+    const label = isMe ? `👤 ${p.name}` : p.name;
+    ctx.font = `700 10px Outfit, sans-serif`;
+    const tw  = ctx.measureText(label).width + 14;
+    const ty  = FACE_H / 2 + 4;
+
+    ctx.fillStyle = isMe ? '#2563eb' : '#1e293b';
+    roundRect(ctx, -tw / 2, ty, tw, 17, 5);
     ctx.fill();
-    ctx.font = '600 10px Outfit, sans-serif';
-    ctx.fillStyle = '#fff';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(tag, 0, FACE_H / 2 + 13);
 
-    // Score bubble above head
+    ctx.fillStyle = '#fff';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, 0, ty + 8.5);
+
+    // ── Score bubble above bird ──
+    const bubbleR = isMe ? 13 : 10;
+    const bubbleY = -FACE_H / 2 - 13;
+    ctx.globalAlpha = isMe ? 1.0 : 0.85;
     ctx.fillStyle = p.color;
     ctx.beginPath();
-    ctx.arc(0, -FACE_H / 2 - 12, 12, 0, Math.PI * 2);
+    ctx.arc(0, bubbleY, bubbleR, 0, Math.PI * 2);
     ctx.fill();
-    ctx.font = '800 10px Outfit, sans-serif';
+    ctx.font = isMe ? '800 10px Outfit, sans-serif' : '700 9px Outfit, sans-serif';
     ctx.fillStyle = '#000';
-    ctx.textAlign = 'center';
+    ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(p.score, 0, -FACE_H / 2 - 12);
+    ctx.fillText(p.score, 0, bubbleY);
 
     ctx.restore();
   });
 }
 
-// Polyfill for roundRect
-if (!CanvasRenderingContext2D.prototype.roundRect) {
-  CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
-    if (w < 2*r) r = w/2;
-    if (h < 2*r) r = h/2;
-    this.beginPath();
-    this.moveTo(x+r, y);
-    this.arcTo(x+w, y, x+w, y+h, r);
-    this.arcTo(x+w, y+h, x, y+h, r);
-    this.arcTo(x, y+h, x, y, r);
-    this.arcTo(x, y, x+w, y, r);
-    this.closePath();
-    return this;
-  };
+// Utility: draw rounded rectangle
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y,     x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x,     y + h, r);
+  ctx.arcTo(x,     y + h, x,     y,     r);
+  ctx.arcTo(x,     y,     x + w, y,     r);
+  ctx.closePath();
 }
 
-// ── Game Loop ────────────────────────────────────────────────
-function startGameLoop() {
-  function loop() {
-    ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+// ── Main Render Loop ─────────────────────────────────────────
+function renderLoop() {
+  ctx.clearRect(0, 0, CW, CH);
 
-    if (gameState !== 'lobby') groundX = (groundX - 1.65) % 24;
-
-    drawBackground();
-    if (gameState === 'playing' || gameState === 'roundover') {
-      drawPipes();
-    }
-    drawPlayers();
-
-    frames++;
-    requestAnimationFrame(loop);
+  if (gameState !== 'lobby') {
+    groundX = (groundX - 1.65) % 24;
   }
-  requestAnimationFrame(loop);
+
+  drawBackground();
+
+  if (gameState === 'playing' || gameState === 'roundover') {
+    drawPipes();
+  }
+
+  drawPlayers();
+
+  frames++;
+  requestAnimationFrame(renderLoop);
 }

@@ -32,7 +32,8 @@ const SCROLL_SPEED   = 1.65;
 const SPAWN_INTERVAL = 140; // frames between pipes
 const GRAVITY        = 0.22;
 const JUMP_VEL       = -4.6;
-const MIN_PLAYERS_TO_START = 1; // start as soon as at least 1 player joins
+const TICK_MS        = 1000 / 60; // 60fps server loop
+const MIN_PLAYERS_TO_START = 1;
 const COUNTDOWN_SECS = 3;
 
 // ─── Game State ──────────────────────────────────────────────
@@ -62,23 +63,24 @@ function spawnPipe() {
   const minTop = 70;
   const maxTop = GROUND_Y - GAP - 70;
   const topH = Math.floor(Math.random() * (maxTop - minTop + 1)) + minTop;
-  pipes.push({ x: CANVAS_WIDTH, top: topH });
+  pipes.push({ x: CANVAS_WIDTH, top: topH, id: Date.now() + Math.random() });
 }
 
 function updatePipes() {
-  if (frames % SPAWN_INTERVAL === 0) spawnPipe();
+  // Don't spawn on frame 0 – give players a breathing start
+  if (frames > 0 && frames % SPAWN_INTERVAL === 0) spawnPipe();
   pipes.forEach(p => { p.x -= SCROLL_SPEED; });
   pipes = pipes.filter(p => p.x + PIPE_WIDTH > -20);
 }
 
 // ─── Player Physics ──────────────────────────────────────────
 function updatePlayers() {
-  Object.values(players).forEach(p => {
-    if (!p.alive) return;
-    p.vel  += GRAVITY;
-    p.y    += p.vel;
+  const alive = Object.values(players).filter(p => p.alive);
+  alive.forEach(p => {
+    p.vel += GRAVITY;
+    p.y   += p.vel;
 
-    // Collision with ground
+    // Ground collision
     if (p.y + 20 >= GROUND_Y) {
       p.y = GROUND_Y - 20;
       killPlayer(p);
@@ -87,21 +89,21 @@ function updatePlayers() {
     // Ceiling
     if (p.y - 20 <= 0) { p.y = 20; p.vel = 0; }
 
-    // Collision with pipes
-    pipes.forEach(pipe => {
-      const left   = p.x - 16;
-      const right  = p.x + 16;
-      const top    = p.y - 16;
-      const bottom = p.y + 16;
-      const inX    = right > pipe.x && left < pipe.x + PIPE_WIDTH;
-      if (inX && (top < pipe.top || bottom > pipe.top + GAP)) {
+    // Pipe collision (check only pipes in x-range)
+    for (const pipe of pipes) {
+      if (pipe.x - 20 > p.x + 16) continue; // not reached yet
+      if (pipe.x + PIPE_WIDTH < p.x - 16) continue; // already passed
+
+      const inX = (p.x + 14) > pipe.x && (p.x - 14) < (pipe.x + PIPE_WIDTH);
+      if (inX && ((p.y - 14) < pipe.top || (p.y + 14) > pipe.top + GAP)) {
         killPlayer(p);
+        break;
       }
-    });
+    }
 
     // Score: passed a pipe
     pipes.forEach(pipe => {
-      if (!pipe['scored_' + p.id] && pipe.x + PIPE_WIDTH < p.x) {
+      if (!pipe['scored_' + p.id] && pipe.x + PIPE_WIDTH < p.x - 14) {
         pipe['scored_' + p.id] = true;
         p.score++;
       }
@@ -126,6 +128,8 @@ function checkRoundEnd() {
 function endRound() {
   gameState = 'roundover';
   clearInterval(gameLoop);
+  clearInterval(countdownTimer);
+  clearTimeout(roundOverTimer);
   gameLoop = null;
 
   const leaderboard = Object.values(players)
@@ -134,13 +138,15 @@ function endRound() {
 
   io.emit('roundOver', { leaderboard });
 
-  // Reset for next round after 6 seconds
+  // Reset for next round after 3.5 seconds
   roundOverTimer = setTimeout(() => {
     resetRound();
-  }, 6000);
+  }, 3500);
 }
 
 function resetRound() {
+  clearInterval(countdownTimer);
+  clearTimeout(roundOverTimer);
   pipes = [];
   frames = 0;
   Object.values(players).forEach(p => {
@@ -153,6 +159,9 @@ function resetRound() {
 }
 
 function startCountdown() {
+  clearInterval(countdownTimer);
+  clearTimeout(roundOverTimer);
+
   if (Object.keys(players).length < MIN_PLAYERS_TO_START) {
     gameState = 'lobby';
     io.emit('gameState', { state: 'lobby' });
@@ -173,6 +182,7 @@ function startCountdown() {
 }
 
 function startPlaying() {
+  clearInterval(gameLoop);
   gameState = 'playing';
   pipes = [];
   frames = 0;
@@ -186,15 +196,15 @@ function startPlaying() {
     updatePlayers();
     frames++;
 
-    // Broadcast full state every tick
+    // Broadcast full state every tick — include vel for smooth rotation on client
     io.emit('tick', {
       pipes: pipes.map(p => ({ x: p.x, top: p.top })),
       players: Object.values(players).map(p => ({
-        id: p.id, name: p.name, y: p.y, alive: p.alive,
-        score: p.score, color: p.color
+        id: p.id, name: p.name, y: p.y, vel: p.vel,
+        alive: p.alive, score: p.score, color: p.color
       }))
     });
-  }, 1000 / 60); // 60 fps
+  }, 1000 / 60); // 60fps
 }
 
 // ─── Socket.IO Events ────────────────────────────────────────
