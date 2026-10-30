@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Multiplayer Flappy – Saicharan Edition</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ── JOIN SCREEN ─────────────────────── -->
+  <div id="join-screen">
+    <div class="join-card">
+      <img src="assets/player.png" alt="Saicharan" class="join-avatar">
+      <h1 class="join-title">FLAPPY <span>SAICHARAN</span></h1>
+      <p class="join-sub">Global Multiplayer • No Rooms • Play with the World!</p>
+      <div class="join-form">
+        <input id="name-input" type="text" maxlength="16" placeholder="Enter your name…" autocomplete="off" spellcheck="false">
+        <button id="join-btn">JOIN GAME 🚀</button>
+      </div>
+      <div id="online-badge" class="online-badge">🌍 <span id="online-count">0</span> online</div>
+    </div>
+  </div>
+
+  <!-- ── GAME SCREEN ────────────────────── -->
+  <div id="game-screen" class="hidden">
+
+    <!-- Top HUD -->
+    <div id="hud">
+      <div id="my-score-label">SCORE <span id="my-score">0</span></div>
+      <div id="online-hud">🌍 <span id="hud-online">1</span></div>
+      <button id="mute-btn" class="ctrl-btn">🎵</button>
+    </div>
+
+    <!-- Player list sidebar -->
+    <div id="player-list-panel">
+      <div class="panel-title">PLAYERS</div>
+      <div id="player-list"></div>
+    </div>
+
+    <!-- Canvas -->
+    <canvas id="game-canvas"></canvas>
+
+    <!-- Countdown Overlay -->
+    <div id="countdown-overlay" class="overlay hidden">
+      <div id="countdown-number">3</div>
+      <div class="countdown-sub">Get Ready!</div>
+    </div>
+
+    <!-- Waiting Overlay -->
+    <div id="waiting-overlay" class="overlay hidden">
+      <div class="waiting-icon">⏳</div>
+      <div class="waiting-text">Waiting for next round…</div>
+      <div class="waiting-sub" id="spectate-hint">Watch others play!</div>
+    </div>
+
+    <!-- Round Over Overlay -->
+    <div id="roundover-overlay" class="overlay hidden">
+      <div class="roundover-card">
+        <!-- Pinned Face Corner -->
+        <div class="pinned-avatar-wrap">
+          <div class="pin-tack">📌</div>
+          <img src="assets/player.png" alt="" class="pinned-face">
+        </div>
+        <div class="roundover-title">ROUND OVER!</div>
+        <div class="leaderboard" id="leaderboard"></div>
+        <div class="next-round-note">Next round starting…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Audio -->
+  <audio id="audio-bgm" src="assets/bgm.m4a" loop preload="auto" playsinline></audio>
+  <audio id="audio-gameover" src="assets/gameover.m4a" preload="auto" playsinline></audio>
+
+  <!-- Socket.IO from server -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
